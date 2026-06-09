@@ -32,7 +32,15 @@ integratedRelay:
 iceServers:
   # Google's STUN server is used by default
   - urls: 'stun:stun.l.google.com:19302'
+# For production servers, prefer an external TURN service such as coturn.
+# Keep UDP first for latency, then add TCP/TLS fallbacks for restricted networks.
 #   - urls: 'turn:example.com'
+#     username: 'TurnUsername'
+#     credential: 'TurnPassword'
+#   - urls: 'turn:example.com:3478?transport=udp'
+#     username: 'TurnUsername'
+#     credential: 'TurnPassword'
+#   - urls: 'turns:example.com:443?transport=tcp'
 #     username: 'TurnUsername'
 #     credential: 'TurnPassword'
 #   - urls: 'stun:example.com'

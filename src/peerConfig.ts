@@ -9,7 +9,7 @@ interface IntegratedRelaySettings {
 	enabled: boolean;
 	listeningIps: string[];
 	relayIps: string[];
-	externalIps: string[];
+	externalIps: string[] | Record<string, string> | null;
 	minPort: number;
 	maxPort: number;
 	listeningPort: number;
@@ -30,7 +30,7 @@ const DEFAULT_PEER_CONFIG: PeerConfig = {
 		enabled: false,
 		listeningIps: ['0.0.0.0'],
 		relayIps: [],
-		externalIps : null,
+		externalIps: null,
 		minPort: 49152,
 		maxPort: 65535,
 		listeningPort: 3478,
@@ -48,7 +48,16 @@ const DEFAULT_PEER_CONFIG: PeerConfig = {
 let peerConfig = DEFAULT_PEER_CONFIG;
 if (fs.existsSync(PEER_CONFIG_PATH)) {
 	try {
-		peerConfig = YAML.parse(fs.readFileSync(PEER_CONFIG_PATH).toString('utf8'));
+		const configFromFile = YAML.parse(fs.readFileSync(PEER_CONFIG_PATH).toString('utf8')) as Partial<PeerConfig>;
+		peerConfig = {
+			...DEFAULT_PEER_CONFIG,
+			...configFromFile,
+			integratedRelay: {
+				...DEFAULT_PEER_CONFIG.integratedRelay,
+				...(configFromFile.integratedRelay || {}),
+			},
+			iceServers: configFromFile.iceServers || DEFAULT_PEER_CONFIG.iceServers,
+		};
 	} catch (err) {
 		console.error(`Unable to load peer config file. Make sure it is valid YAML.\n${err}`);
 	}

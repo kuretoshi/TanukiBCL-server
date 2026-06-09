@@ -5,7 +5,7 @@ import { Server } from 'http';
 import { Server as HttpsServer } from 'https';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import socketIO from 'socket.io';
+import { Server as SocketIOServer, Socket } from 'socket.io';
 import Tracer from 'tracer';
 import morgan from 'morgan';
 import peerConfig from './peerConfig';
@@ -20,6 +20,11 @@ const httpsEnabled = !!process.env.HTTPS;
 const port = process.env.PORT || (httpsEnabled ? '443' : '9736');
 
 const sslCertificatePath = process.env.SSLPATH || process.cwd();
+const maxLobbyClients = readPositiveInteger(process.env.MAX_LOBBY_CLIENTS, 20);
+const maxSignalEventsPerWindow = readPositiveInteger(process.env.MAX_SIGNAL_EVENTS_PER_WINDOW, 300);
+const maxVadEventsPerWindow = readPositiveInteger(process.env.MAX_VAD_EVENTS_PER_WINDOW, 60);
+const maxLobbyEventsPerWindow = readPositiveInteger(process.env.MAX_LOBBY_EVENTS_PER_WINDOW, 20);
+const rateLimitWindowMs = readPositiveInteger(process.env.RATE_LIMIT_WINDOW_MS, 10000);
 
 const logger = Tracer.colorConsole({
 	format: '{{timestamp}} <{{title}}> {{message}}',
@@ -66,17 +71,25 @@ if (peerConfig.integratedRelay.enabled) {
 	turnServer.start();
 }
 
-const io = socketIO(server);
+const io = new SocketIOServer(server, {
+	allowEIO3: true,
+	transports: ['websocket'],
+});
 const clients = new Map<string, Client>();
 const publicLobbies = new Map<string, PublicLobby>();
 const lobbyCodes = new Map<number, string>();
 const allLobbies = new Map<string, lobbyInfo>();
 let lobbyCount = 0;
 
+function readPositiveInteger(value: string | undefined, fallback: number): number {
+	const parsed = Number(value);
+	return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 function removePublicLobby(c: string) {
 	if (publicLobbies.has(c)) {
 		let pid = publicLobbies.get(c).id;
-		io.sockets.in('lobbybrowser').emit('remove_lobby', pid);
+		io.in('lobbybrowser').emit('remove_lobby', pid);
 		lobbyCodes.delete(pid);
 		publicLobbies.delete(c);
 	}
@@ -87,7 +100,7 @@ interface Client {
 }
 
 interface Signal {
-	data: string;
+	data: any;
 	to: string;
 }
 
@@ -101,6 +114,11 @@ app.set('views', join(__dirname, '../views'));
 app.use('/public', express.static(join(__dirname, '../public')));
 app.set('view engine', 'pug');
 app.use(morgan('combined'));
+
+interface RateLimitBucket {
+	windowStartedAt: number;
+	count: number;
+}
 
 let connectionCount = 0;
 
@@ -130,23 +148,64 @@ app.get('/lobbies', (req, res) => {
 	res.json(Array.from(publicLobbies.values()));
 });
 
-const leaveroom = (socket: socketIO.Socket, code: string) => {
+function getSocketsInRoom(room: string): string[] {
+	const socketRoom = io.sockets.adapter.rooms.get(room);
+	return socketRoom ? Array.from(socketRoom) : [];
+}
+
+function isSocketInRoom(socketId: string, room: string): boolean {
+	return io.sockets.adapter.rooms.get(room)?.has(socketId) ?? false;
+}
+
+function isValidLobbyCode(value: string): boolean {
+	return typeof value === 'string' && /^[A-Za-z0-9_-]{4,32}$/.test(value);
+}
+
+function enforceRateLimit(
+	socket: Socket,
+	buckets: Map<string, RateLimitBucket>,
+	name: string,
+	limit: number
+): boolean {
+	const now = Date.now();
+	const bucket = buckets.get(name);
+	if (!bucket || now - bucket.windowStartedAt >= rateLimitWindowMs) {
+		buckets.set(name, { windowStartedAt: now, count: 1 });
+		return true;
+	}
+
+	bucket.count++;
+	if (bucket.count <= limit) {
+		return true;
+	}
+
+	logger.warn('Socket %s exceeded %s rate limit: %d/%d', socket.id, name, bucket.count, limit);
+	return false;
+}
+
+const leaveroom = (socket: Socket, code: string | null) => {
 	if (!code) {
 		return;
 	}
-	if (code && (code.length === 6 || code.length === 4)) socket.leave(code);
+	socket.leave(code);
 
-	if ((io.sockets.adapter.rooms[code]?.length ?? 0) <= 0) {
+	const lobby = allLobbies.get(code);
+	if (lobby) {
+		lobby.connectedCount = Math.max(0, lobby.connectedCount - 1);
+	}
+
+	if (getSocketsInRoom(code).length <= 0) {
 		if (allLobbies.has(code)) {
 			allLobbies.delete(code);
 		}
 		removePublicLobby(code);
 	}
 };
-io.on('connection', (socket: socketIO.Socket) => {
+io.on('connection', (socket: Socket) => {
 	connectionCount++;
 	logger.info('Total connected: %d in %d lobbies', connectionCount, allLobbies.size);
 	let code: string | null = null;
+	const rateLimitBuckets = new Map<string, RateLimitBucket>();
 
 	const clientPeerConfig: ClientPeerConfig = {
 		forceRelayOnly: peerConfig.forceRelayOnly,
@@ -168,7 +227,7 @@ io.on('connection', (socket: socketIO.Socket) => {
 
 	socket.on('join', (c: string, id: number, clientId: number, isHost?: boolean) => {
 		if (
-			typeof c !== 'string' ||
+			!isValidLobbyCode(c) ||
 			typeof id !== 'number' ||
 			typeof clientId !== 'number' 
 		) {
@@ -178,8 +237,14 @@ io.on('connection', (socket: socketIO.Socket) => {
 		}
 
 		let otherClients: any = {};
-		if (io.sockets.adapter.rooms[c]) {
-			let socketsInLobby = Object.keys(io.sockets.adapter.rooms[c].sockets);
+		const socketsInLobby = getSocketsInRoom(c);
+		if (socketsInLobby.length >= maxLobbyClients && !isSocketInRoom(socket.id, c)) {
+			socket.emit('error', { message: 'Lobby is full.' });
+			logger.warn('Socket %s tried to join full lobby %s', socket.id, c);
+			return;
+		}
+
+		if (socketsInLobby.length > 0) {
 			for (let s of socketsInLobby) {
 				if (s !== socket.id) otherClients[s] = clients.get(s);
 			}
@@ -188,18 +253,19 @@ io.on('connection', (socket: socketIO.Socket) => {
 		if (!allLobbies.has(c)) {
 			allLobbies.set(c, { code: c, hostId: isHost ? clientId : -1, publicLobbyId: -1, connectedCount: 1 });
 		} else {
-			allLobbies.get(c).connectedCount++;
+			const lobby = allLobbies.get(c);
+			lobby.connectedCount = Math.max(lobby.connectedCount, socketsInLobby.length) + (isSocketInRoom(socket.id, c) ? 0 : 1);
 			if (isHost) {
-				allLobbies.get(c).hostId = clientId;
-				socket.to(code).broadcast.emit('setHost', clientId);
+				lobby.hostId = clientId;
+				socket.to(c).emit('setHost', clientId);
 			}
-			socket.emit('setHost', allLobbies.get(c).hostId);
+			socket.emit('setHost', lobby.hostId);
 		}
 
 		if (code != c) leaveroom(socket, code);
 		code = c;
 		socket.join(code);
-		socket.to(code).broadcast.emit('join', socket.id, {
+		socket.to(code).emit('join', socket.id, {
 			playerId: id,
 			clientId: clientId,
 		});
@@ -210,7 +276,7 @@ io.on('connection', (socket: socketIO.Socket) => {
 		if (code === c) {
 			if (allLobbies.has(c)) {
 				allLobbies.get(c).hostId = clientId;
-				socket.to(code).broadcast.emit('setHost', clientId);
+				socket.to(code).emit('setHost', clientId);
 			}
 		}
 	});
@@ -234,7 +300,7 @@ io.on('connection', (socket: socketIO.Socket) => {
 			clientId: clientId,
 		};
 		clients.set(socket.id, client);
-		socket.to(code).broadcast.emit('setClient', socket.id, client);
+		socket.to(code).emit('setClient', socket.id, client);
 	});
 
 	socket.on('leave', () => {
@@ -245,9 +311,16 @@ io.on('connection', (socket: socketIO.Socket) => {
 	});
 
 	socket.on('VAD', (activity: boolean) => {
+		if (!enforceRateLimit(socket, rateLimitBuckets, 'VAD', maxVadEventsPerWindow)) {
+			return;
+		}
+		if (typeof activity !== 'boolean') {
+			logger.warn('Socket %s sent invalid VAD command: %j', socket.id, activity);
+			return;
+		}
 		let client = clients.get(socket.id);
 		if (code && client) {
-			socket.to(code).broadcast.emit('VAD', {
+			socket.to(code).emit('VAD', {
 				activity,
 				client,
 				socketId: socket.id,
@@ -271,6 +344,9 @@ io.on('connection', (socket: socketIO.Socket) => {
 	});
 
 	socket.on('lobby', (c: string, publicLobby: PublicLobby) => {
+		if (!enforceRateLimit(socket, rateLimitBuckets, 'lobby', maxLobbyEventsPerWindow)) {
+			return;
+		}
 		if (code != c) {
 			logger.error(`Got request to host lobby while not in it %s`, c, code);
 			return;
@@ -301,7 +377,7 @@ io.on('connection', (socket: socketIO.Socket) => {
 			};
 			lobbyCodes.set(id, c);
 			publicLobbies.set(c, lobby);
-			io.sockets.in('lobbybrowser').emit('update_lobby', lobby);
+			io.in('lobbybrowser').emit('update_lobby', lobby);
 		}
 	});
 
@@ -314,24 +390,35 @@ io.on('connection', (socket: socketIO.Socket) => {
 	});
 
 	socket.on('signal', (signal: Signal) => {
+		if (!enforceRateLimit(socket, rateLimitBuckets, 'signal', maxSignalEventsPerWindow)) {
+			return;
+		}
 		if (typeof signal !== 'object' || !signal.data || !signal.to || typeof signal.to !== 'string') {
 			socket.disconnect();
 			logger.error(`Socket %s sent invalid signal command: %j`, socket.id, signal);
 			return;
 		}
 		const { to, data } = signal;
+		if (!code || !isSocketInRoom(to, code)) {
+			logger.warn('Socket %s tried to signal socket %s outside lobby %s', socket.id, to, code);
+			return;
+		}
 		io.to(to).emit('signal', {
 			data,
 			from: socket.id,
+			client: clients.get(socket.id),
 		});
 	});
 
 	socket.on('lobbybrowser', (open) => {
+		if (!enforceRateLimit(socket, rateLimitBuckets, 'lobbybrowser', maxLobbyEventsPerWindow)) {
+			return;
+		}
 		if (!open) {
 			socket.leave('lobbybrowser');
 		} else {
 			socket.join('lobbybrowser');
-			io.sockets.in('lobbybrowser').emit('new_lobbies', Array.from(publicLobbies.values()));
+			io.in('lobbybrowser').emit('new_lobbies', Array.from(publicLobbies.values()));
 		}
 	});
 
