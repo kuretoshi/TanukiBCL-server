@@ -4,7 +4,7 @@
 
 TanukiBCL Server は、Among Us 向け近接ボイスチャットクライアント **TanukiBCL** / BetterCrewLink 互換クライアント用のシグナリングサーバーです。
 
-このリポジトリは [OhMyGuus/BetterCrewLink-server](https://github.com/OhMyGuus/BetterCrewLink-server) をベースにしたフォークです。元プロジェクトの互換性を保ちながら、TanukiBCL 向けに通信安定性、Socket.IO 互換性、運用設定を調整しています。
+このリポジトリは [OhMyGuus/BetterCrewLink-server](https://github.com/OhMyGuus/BetterCrewLink-server) をベースにしたフォークです。互換性を維持しつつ、TanukiBCL 向けに通信安定性、Socket.IO 互換性、運用設定を調整しています。
 
 ## 概要
 
@@ -22,7 +22,7 @@ TanukiBCL Server は、Among Us 向け近接ボイスチャットクライアン
 
 - Socket.IO 4 へ更新
 - `allowEIO3: true` により既存の `socket.io-client@2.4.x` クライアントにも対応
-- WebRTC `signal` のロビー外転送を拒否
+- WebRTC `signal` のロビー外転送を抑制
 - `signal` / `VAD` / ロビー更新イベントの簡易レート制限
 - ロビー人数上限の設定
 - `peerConfig.yml` の部分設定に対するデフォルト補完
@@ -32,9 +32,9 @@ TanukiBCL Server は、Among Us 向け近接ボイスチャットクライアン
 
 このサーバーは Socket.IO 4 で動作します。
 
-ただし Engine.IO 3 互換を有効にしているため、既存 BetterCrewLink 系クライアントで使われている `socket.io-client@2.4.x` からも接続できます。Socket.IO 4 クライアントからの接続にも対応します。
+ただし Engine.IO 3 互換を有効にしているため、既存の BetterCrewLink 系クライアントで使われている `socket.io-client@2.4.x` からも接続できます。Socket.IO 4 クライアントからの接続にも対応します。
 
-これにより、TanukiBCL クライアントは以下の両方へ接続できます。
+TanukiBCL クライアントは以下の両方へ接続できる想定です。
 
 - 既存の BetterCrewLink-server 系 Socket.IO 2.4.1 サーバー
 - TanukiBCL Server の Socket.IO 4 サーバー
@@ -55,13 +55,146 @@ yarn install
 yarn start
 ```
 
-開発中にコンパイルだけ確認する場合:
+コンパイルのみ確認する場合:
 
 ```sh
 yarn compile
 ```
 
 デフォルトでは `9736` 番ポートで起動します。`HTTPS=true` の場合はデフォルトが `443` になります。
+
+## Docker
+
+このリポジトリには Dockerfile が含まれています。Node.js や Yarn をホスト側に直接入れずに、コンテナとして TanukiBCL Server を起動できます。
+
+### イメージのビルド
+
+```sh
+docker build -t tanukibcl-server:local .
+```
+
+### 最小構成で起動
+
+内蔵 TURN を使わず、シグナリングサーバーとして起動するだけなら `9736/tcp` を公開します。
+
+```sh
+docker run -d \
+  --name tanukibcl-server \
+  -p 9736:9736 \
+  -e PORT=9736 \
+  tanukibcl-server:local
+```
+
+PowerShell では次のように実行できます。
+
+```powershell
+docker run -d `
+  --name tanukibcl-server `
+  -p 9736:9736 `
+  -e PORT=9736 `
+  tanukibcl-server:local
+```
+
+クライアント側のサーバーURLには、公開したサーバーの URL を指定します。
+
+```txt
+http://127.0.0.1:9736
+https://voice.example.com
+```
+
+### 内蔵 TURN を使う場合
+
+内蔵 TURN を有効にする場合は、`HOSTNAME` と TURN 用ポートの公開が必要です。`HOSTNAME` にはクライアントから直接到達できる DNS 名またはグローバル IP を指定してください。Cloudflare などの HTTP プロキシ越しのホスト名では TURN は正しく動作しません。
+
+```sh
+docker run -d \
+  --name tanukibcl-server \
+  -p 9736:9736 \
+  -p 3478:3478/tcp \
+  -p 3478:3478/udp \
+  -p 49152-65535:49152-65535/udp \
+  -e PORT=9736 \
+  -e HOSTNAME=voice.example.com \
+  tanukibcl-server:local
+```
+
+PowerShell:
+
+```powershell
+docker run -d `
+  --name tanukibcl-server `
+  -p 9736:9736 `
+  -p 3478:3478/tcp `
+  -p 3478:3478/udp `
+  -p 49152-65535:49152-65535/udp `
+  -e PORT=9736 `
+  -e HOSTNAME=voice.example.com `
+  tanukibcl-server:local
+```
+
+大きい UDP ポート範囲を公開できない環境では、`config/peerConfig.yml` 側で `integratedRelay.minPort` / `maxPort` を狭め、その範囲だけを `-p` で公開してください。
+
+例:
+
+```yml
+integratedRelay:
+  enabled: true
+  listeningPort: 3478
+  minPort: 50000
+  maxPort: 50100
+```
+
+```sh
+docker run -d \
+  --name tanukibcl-server \
+  -p 9736:9736 \
+  -p 3478:3478/tcp \
+  -p 3478:3478/udp \
+  -p 50000-50100:50000-50100/udp \
+  -e PORT=9736 \
+  -e HOSTNAME=voice.example.com \
+  -v "$(pwd)/config/peerConfig.yml:/app/config/peerConfig.yml:ro" \
+  tanukibcl-server:local
+```
+
+PowerShell:
+
+```powershell
+docker run -d `
+  --name tanukibcl-server `
+  -p 9736:9736 `
+  -p 3478:3478/tcp `
+  -p 3478:3478/udp `
+  -p 50000-50100:50000-50100/udp `
+  -e PORT=9736 `
+  -e HOSTNAME=voice.example.com `
+  -v "${PWD}\config\peerConfig.yml:/app/config/peerConfig.yml:ro" `
+  tanukibcl-server:local
+```
+
+### HTTPS で起動する場合
+
+コンテナ内で HTTPS を直接有効にする場合は、`HTTPS=true` を設定し、`fullchain.pem` と `privkey.pem` を含むディレクトリを `SSLPATH` にマウントします。
+
+```sh
+docker run -d \
+  --name tanukibcl-server \
+  -p 443:443 \
+  -e HTTPS=true \
+  -e SSLPATH=/certs \
+  -v "/path/to/certs:/certs:ro" \
+  tanukibcl-server:local
+```
+
+実運用では、Nginx や Caddy などのリバースプロキシで TLS を終端し、コンテナは `9736` で HTTP 起動する構成も使えます。
+
+### ログ確認と停止
+
+```sh
+docker logs -f tanukibcl-server
+docker stop tanukibcl-server
+docker rm tanukibcl-server
+```
 
 ## クライアント設定
 
@@ -97,11 +230,13 @@ WebRTC の接続方式は `config/peerConfig.yml` で設定できます。
 
 初期状態では `config/peerConfig.example.yml` が用意されています。利用する場合はコピーして `peerConfig.yml` を作成してください。
 
-```sh
-copy config\peerConfig.example.yml config\peerConfig.yml
+Windows:
+
+```powershell
+Copy-Item config\peerConfig.example.yml config\peerConfig.yml
 ```
 
-Linux / macOS の場合:
+Linux / macOS:
 
 ```sh
 cp config/peerConfig.example.yml config/peerConfig.yml
@@ -119,7 +254,7 @@ integratedRelay:
   maxPort: 65535
 ```
 
-内蔵 TURN を使う場合は `HOSTNAME` を設定してください。Cloudflare などのプロキシを通すホスト名ではなく、サーバーへ直接到達できる DNS 名または IP が必要です。
+内蔵 TURN を使う場合は `HOSTNAME` を設定してください。
 
 ### 本番運用
 
@@ -159,22 +294,6 @@ UDP が使える環境では `turn:3478?transport=udp` が低遅延です。学�
 ### `GET /lobbies`
 
 公開ロビー一覧を JSON で返します。
-
-## Docker
-
-Dockerfile は含まれていますが、イメージ名や公開先は運用環境に合わせて変更してください。
-
-ビルド例:
-
-```sh
-docker build -t tanukibcl-server:local .
-```
-
-起動例:
-
-```sh
-docker run -d -p 9736:9736 --name tanukibcl-server tanukibcl-server:local
-```
 
 ## ライセンス
 
