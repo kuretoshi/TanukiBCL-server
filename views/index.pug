@@ -1,30 +1,34 @@
 doctype html
-head
-	title BetterCrewLink Server
-	link(rel="icon", href="https://github.com/OhMyGuus/CrewLink/raw/master/logo.png", type="image/x-icon")
-	meta(property='og:title' content='BetterCrewLink Server')
-	meta(property='og:description' content='Voice server for Among Us proximity voice chat')
-	meta(property='og:image' content='https://github.com/OhMyGuus/CrewLink/raw/master/logo.png')
-	link(rel='stylesheet', href='/public/styles.css')
+html(lang="ja")
+	head
+		title TanukiBCL Server
+		meta(charset="utf-8")
+		meta(name="viewport", content="width=device-width, initial-scale=1")
+		link(rel="icon", href="/public/logo.png", type="image/png")
+		meta(property='og:title' content='TanukiBCL Server')
+		meta(property='og:description' content='Among Us 近接ボイスチャット用シグナリングサーバー')
+		meta(property='og:image' content='/public/logo.png')
+		link(rel='stylesheet', href='/public/styles.css')
 
 
-img(src="https://github.com/OhMyGuus/CrewLink/raw/master/logo.png")
-h1 BetterCrewlink Server
-#crewinfo
+	body
+		img(src="/public/logo.png", alt="TanukiBCL Server")
+		h1 TanukiBCL Server
+		#crewinfo
 
-	p This is a BetterCrewLink Server running on: 
-	br
-	b #{address}
-	p There #{connectionCount === 1 ? 'is' : 'are'} currently #{connectionCount} connected user#{connectionCount === 1 ? '' : 's'} 
-	<hr>
-	p
-		a(href="https://github.com/OhMyGuus/BetterCrewLink/releases/latest", target="_blank")
-			| To download BetterCrewLink
-			| <b>Click here</b>
-	<hr>
-	 
+			p このサーバーは次のURLで稼働しています。
+			br
+			b #{address}
+			p 現在の接続ユーザー数: #{connectionCount}
+			p 公開ロビー数: #{lobbiesCount}
+			<hr>
+			p
+				a(href="https://github.com/OhMyGuus/BetterCrewLink/releases/latest", target="_blank", rel="noopener noreferrer")
+					| BetterCrewLink をダウンロード
+			<hr>
+			p TanukiBCL / BetterCrewLink のサーバーURLに、この公開URLを設定してください。
 		
-#background-container
-	#stars
-	#stars2
-	#stars3
+		#background-container
+			#stars
+			#stars2
+			#stars3
