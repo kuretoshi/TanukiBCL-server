@@ -73,7 +73,11 @@ if (peerConfig.integratedRelay.enabled) {
 
 const io = new SocketIOServer(server, {
 	allowEIO3: true,
-	transports: ['websocket'],
+	transports: ['polling', 'websocket'],
+	cors: {
+		origin: true,
+		credentials: true,
+	},
 });
 const clients = new Map<string, Client>();
 const publicLobbies = new Map<string, PublicLobby>();
@@ -155,6 +159,10 @@ function getSocketsInRoom(room: string): string[] {
 
 function isSocketInRoom(socketId: string, room: string): boolean {
 	return io.sockets.adapter.rooms.get(room)?.has(socketId) ?? false;
+}
+
+function isSocketId(value: string): boolean {
+	return io.sockets.sockets.has(value);
 }
 
 function isValidLobbyCode(value: string): boolean {
@@ -399,8 +407,10 @@ io.on('connection', (socket: Socket) => {
 			return;
 		}
 		const { to, data } = signal;
-		if (!code || !isSocketInRoom(to, code)) {
-			logger.warn('Socket %s tried to signal socket %s outside lobby %s', socket.id, to, code);
+		const targetIsSocketInLobby = !!code && isSocketId(to) && isSocketInRoom(to, code);
+		const targetIsRoom = !!code && !isSocketId(to) && io.sockets.adapter.rooms.has(to);
+		if (!targetIsSocketInLobby && !targetIsRoom) {
+			logger.warn('Socket %s tried to signal unknown or unauthorized target %s outside lobby %s', socket.id, to, code);
 			return;
 		}
 		io.to(to).emit('signal', {
