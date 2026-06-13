@@ -18,6 +18,7 @@ let TurnServer = require('node-turn');
 const httpsEnabled = !!process.env.HTTPS;
 
 const port = process.env.PORT || (httpsEnabled ? '443' : '9736');
+const publicUrl = process.env.PUBLIC_URL;
 
 const sslCertificatePath = process.env.SSLPATH || process.cwd();
 const maxLobbyClients = readPositiveInteger(process.env.MAX_LOBBY_CLIENTS, 20);
@@ -133,12 +134,12 @@ if (!hostname && peerConfig.integratedRelay.enabled) {
 }
 
 app.get('/', (req, res) => {
-	let address = req.protocol + '://' + req.hostname;
+	let address = publicUrl || req.protocol + '://' + req.hostname;
 	res.render('index', { connectionCount, address, lobbiesCount: allLobbies.size });
 });
 
 app.get('/health', (req, res) => {
-	let address = req.protocol + '://' + req.hostname;
+	let address = publicUrl || req.protocol + '://' + req.hostname;
 	res.json({
 		uptime: process.uptime(),
 		connectionCount,
