@@ -245,6 +245,12 @@ io.on('connection', (socket: Socket) => {
 			return;
 		}
 
+		const client = {
+			playerId: id,
+			clientId: clientId,
+		};
+		clients.set(socket.id, client);
+
 		let otherClients: any = {};
 		const socketsInLobby = getSocketsInRoom(c);
 		if (socketsInLobby.length >= maxLobbyClients && !isSocketInRoom(socket.id, c)) {
@@ -274,10 +280,7 @@ io.on('connection', (socket: Socket) => {
 		if (code != c) leaveroom(socket, code);
 		code = c;
 		socket.join(code);
-		socket.to(code).emit('join', socket.id, {
-			playerId: id,
-			clientId: clientId,
-		});
+		socket.to(code).emit('join', socket.id, client);
 		socket.emit('setClients', otherClients);
 	});
 
